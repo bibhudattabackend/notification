@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notification Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <style>
+        body { padding: 20px; }
+        .unread { background: #f8d7da; cursor: pointer; }
+        .read { background: #f0f0f0; }
+        .notification-container {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            width: 350px;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .notification-bar { 
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .notification-icon {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            cursor: pointer;
+        }
+        .pagination-controls {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: #fff;
+            border-top: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Notification Icon -->
+    <div class="notification-icon">
+        <i class="bi bi-bell fs-4"></i>
+        <span id="unread-count" class="badge bg-danger">0</span>
+    </div>
+
+    <!-- Notification Panel -->
+    <div class="notification-container bg-white border rounded shadow-lg p-3">
+      <!-- Header with title and action buttons -->
+      <div class="d-flex justify-content-between align-items-center border-bottom pb-2">
+          <h5 class="mb-0 text-primary">Notifications</h5>
+          <div class="d-flex gap-2">
+              <button id="markAllRead" class="btn btn-sm btn-outline-success">
+                  <i class="fas fa-check-double"></i> Mark All Read
+              </button>
+              <button id="deleteAllRead" class="btn btn-sm btn-outline-danger">
+                  <i class="fas fa-trash-alt"></i> Delete Read
+              </button>
+          </div>
+      </div>
+  
+      <!-- Notification List -->
+      <div class="notification-bar my-3">
+          <ul id="notifications" class="list-group"></ul>
+      </div>
+  
+      <!-- Pagination Controls -->
+      <div class="d-flex justify-content-between align-items-center border-top pt-2">
+          <button id="prevPage" class="btn btn-sm btn-outline-secondary">
+              <i class="fas fa-arrow-left"></i> Previous
+          </button>
+          <span id="pageInfo" class="fw-bold">Page 1</span>
+          <button id="nextPage" class="btn btn-sm btn-outline-secondary">
+              Next <i class="fas fa-arrow-right"></i>
+          </button>
+      </div>
+  </div>
+  
+
+    <div class="container">
+        <h3>Send Notification</h3>
+        <form id="sendNotificationForm" class="mb-3">
+            <div class="mb-2">
+              <label for="userList">Select User:</label>
+              <select id="userList" class="form-control" required>
+                  <option value="">Select a user</option>
+              </select>
+            </div>
+            <div class="mb-2">
+                <label for="message">Message:</label>
+                <input type="text" id="message" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Send</button>
+        </form>
+    </div>
+
+    <script>
+        // Initialize Socket.IO first
+        const socket = io();
+        const userId = "<%= userId %>";  // Get from server-side template
+        let currentPage = 1;
+        const pageSize = 5;
+        let allNotifications = [];
+
+        // Socket.IO setup
+        socket.emit('register', userId);
+        
+        // Toggle notification panel
+        document.querySelector('.notification-icon').addEventListener('click', function() {
+            const panel = document.querySelector('.notification-container');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+
+        // Pagination controls
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                displayNotifications();
+            }
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            const totalPages = Math.ceil(allNotifications.length / pageSize);
+            if (currentPage < totalPages) {
+                currentPage++;
+                displayNotifications();
+            }
+        });
+
+        // Fetch initial notifications
+        async function fetchNotifications() {
+            try {
+                const response = await fetch(`/notifications?userId=${userId}`);
+                const data = await response.json();
+                allNotifications = data;
+                displayNotifications();
+                updateUnreadCount();
+            } catch (error) {
+                console.error('Error fetching notifications:', error);
+            }
+        }
+
+        function displayNotifications() {
+            const start = (currentPage - 1) * pageSize;
+            const end = start + pageSize;
+            const paginated = allNotifications.slice(start, end);
+            
+            const list = document.getElementById('notifications');
+            list.innerHTML = '';
+            
+            paginated.forEach(notification => {
+                const li = document.createElement('li');
+                li.className = `list-group-item ${notification.isRead ? 'read' : 'unread'}`;
+                li.innerHTML = `
+                    <div class="d-flex justify-content-between">
+                        <div>${notification.message}</div>
+                        <small class="text-muted">
+                            ${new Date(notification.createdAt).toLocaleString()}
+                        </small>
+                    </div>
+                `;
+
+                if (!notification.isRead) {
+                  const userId = localStorage.getItem('userId');
+                  console.log('notification.id', notification.id);
+                    li.addEventListener('click', async () => {
+                        await markAsRead(notification.id);
+                        li.className = 'list-group-item read';
+                        notification.isRead = true;
+                        updateUnreadCount();
+                    });
+                }
+
+                list.appendChild(li);
+            });
+
+            updatePaginationControls();
+        }
+// Listen for message read event (Sender)
+
+
+        async function markAsRead(notificationId) {
+            try {
+                await fetch(`/notifications/${notificationId}/read`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            } catch (error) {
+                console.error('Error marking as read:', error);
+            }
+        }
+
+        function updatePaginationControls() {
+            const totalPages = Math.ceil(allNotifications.length / pageSize);
+            document.getElementById('pageInfo').textContent = 
+                `Page ${currentPage} of ${totalPages || 1}`;
+            
+            document.getElementById('prevPage').disabled = currentPage === 1;
+            document.getElementById('nextPage').disabled = 
+                currentPage === totalPages || totalPages === 0;
+        }
+
+        function updateUnreadCount() {
+            const count = allNotifications.filter(n => !n.isRead).length;
+            document.getElementById('unread-count').textContent = count;
+        }
+
+        // Socket.IO listeners
+        socket.on('new_notification', (notification) => {
+          console.log('hahahahah', notification);
+            allNotifications.unshift(notification);
+            displayNotifications();
+            updateUnreadCount();
+        });
+        async function fetchUsers() {
+    try {
+        const response = await fetch('/notifications/users');
+        const users = await response.json();
+        const userList = document.getElementById('userList');
+
+        users.forEach(user => {
+            const option = document.createElement('option');
+            option.value = user.id;
+            option.textContent = user.username;
+            userList.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Error fetching users:', error);
+    }
+}
+
+// Fetch users on page load
+window.addEventListener('DOMContentLoaded', fetchUsers);
+
+        // Form submission
+        document.getElementById('sendNotificationForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const receiverId = document.getElementById('userList').value;
+            const message = document.getElementById('message').value;
+
+            try {
+                const response = await fetch('/notifications/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ receiverId, message })
+                });
+
+                if (response.ok) {
+                    alert('Notification sent!');
+                    e.target.reset();
+                }
+            } catch (error) {
+                console.error('Error sending notification:', error);
+            }
+        });
+        socket.on('message_read', (notification) => {
+          alert(`${notification.message}`);
+          const notifElement = document.querySelector(`.list-group-item[data-id="${notification.id}"]`);
+          li.setAttribute("data-id", notification.id);
+          if (notifElement) {
+        notifElement.classList.remove('unread');
+        notifElement.classList.add('read');
+    }
+    updateUnreadCount();
+});
+
+document.getElementById("markAllRead").addEventListener("click", async () => {
+    try {
+        await fetch("/notifications/mark-all-read", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId })
+        });
+
+        // Update unread count UI
+        document.getElementById("unread-count").textContent = "0";
+
+        // Update UI to mark all as read
+        document.querySelectorAll(".unread").forEach(el => el.classList.replace("unread", "read"));
+
+        alert("All notifications marked as read!");
+    } catch (error) {
+        console.error("Error marking notifications as read:", error);
+    }
+});
+document.getElementById("deleteAllRead").addEventListener("click", async () => {
+    try {
+        await fetch("/notifications/delete-all-read", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId })
+        });
+
+        // Remove all read notifications from the UI
+        document.querySelectorAll(".read").forEach(el => el.remove());
+
+        alert("All read notifications deleted!");
+    } catch (error) {
+        console.error("Error deleting read notifications:", error);
+    }
+});
+
+        // Initial load
+        window.addEventListener('DOMContentLoaded', fetchNotifications);
+    </script>
+</body>
+</html>
